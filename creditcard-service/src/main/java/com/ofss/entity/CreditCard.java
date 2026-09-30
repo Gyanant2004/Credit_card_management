@@ -12,14 +12,17 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 
 @Entity
-@Table(name = "CREDITCARD")
+@Table(name = "CREDIT_CARD")
 public class CreditCard {
-    @Id
     
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    @Column(name = "CARD_ID")
-    private Long cardId;
     
+	/*
+	 * @GeneratedValue(strategy = GenerationType.IDENTITY)
+	 * 
+	 * @Column(name = "CARD_ID") private Long cardId;
+	 */
+    
+	@Id
     @Column(name = "CARD_NUMBER", precision = 12, nullable = false)
     private Long cardNumber;
 
@@ -27,23 +30,23 @@ public class CreditCard {
     private Long customerId;
 
     @Enumerated(EnumType.STRING)
-    @Column(name = "CARD_TYPE", length = 10, nullable = false)
+    @Column(name = "CARD_TYPE", length = 20, nullable = false)
     private CardType cardType;
 
-    @Column(name = "CREDIT_LIMIT", precision = 12, scale = 2, nullable = false)
+    @Column(name = "CREDIT_LIMIT", precision = 15, scale = 2, nullable = false)
     private BigDecimal creditLimit;
 
-    @Column(name = "AVAIL_CREDIT", precision = 12, scale = 2, nullable = false)
+    @Column(name = "AVAILABLE_CREDIT", precision = 15, scale = 2, nullable = false)
     private BigDecimal availableCredit;
 
-    @Column(name = "OUTSTANDING_AMT", precision = 12, scale = 2, nullable = false)
+    @Column(name = "OUTSTANDING_AMOUNT", precision = 15, scale = 2, nullable = false)
     private BigDecimal outstandingAmount;
 
     @Column(name = "EXPIRY_DATE", nullable = false)
     private LocalDate expiryDate;
 
     @Enumerated(EnumType.STRING)
-    @Column(name = "CARD_STATUS", length = 7, nullable = false)
+    @Column(name = "CARD_STATUS", length = 20, nullable = false)
     private CardStatus cardStatus;
 
     protected CreditCard() {
