@@ -4,7 +4,10 @@ import java.math.BigDecimal;
 
 public class CardDetails {
 
-    private String cardNumber;
+    private Long cardNumber;
+    private String cardType;
+    private BigDecimal creditLimit;
+    private String expiryDate;
     private String cardStatus;
     private BigDecimal availableCredit;
     private BigDecimal outstandingAmount;
@@ -12,12 +15,36 @@ public class CardDetails {
     public CardDetails() {
     }
 
-    public String getCardNumber() {
+    public Long getCardNumber() {
         return cardNumber;
     }
 
-    public void setCardNumber(String cardNumber) {
+    public void setCardNumber(Long cardNumber) {
         this.cardNumber = cardNumber;
+    }
+
+    public String getCardType() {
+        return cardType;
+    }
+
+    public void setCardType(String cardType) {
+        this.cardType = cardType;
+    }
+
+    public BigDecimal getCreditLimit() {
+        return creditLimit;
+    }
+
+    public void setCreditLimit(BigDecimal creditLimit) {
+        this.creditLimit = creditLimit;
+    }
+
+    public String getExpiryDate() {
+        return expiryDate;
+    }
+
+    public void setExpiryDate(String expiryDate) {
+        this.expiryDate = expiryDate;
     }
 
     public String getCardStatus() {
