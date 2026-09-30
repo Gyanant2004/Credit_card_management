@@ -6,8 +6,10 @@ import java.util.List;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
+import org.springframework.web.client.RestClientResponseException;
 
 import com.ofss.dto.AmountRequest;
+import com.ofss.dto.BalanceResponse;
 import com.ofss.dto.CardDetails;
 import com.ofss.dto.PurchaseRequest;
 import com.ofss.entity.Merchant;
@@ -34,11 +36,15 @@ public class PurchaseService {
         this.cardServiceClient = cardServiceClient;
     }
 
+    // =========================================================
+    // CREATE PURCHASE
+    // =========================================================
+
     public Transaction makePurchase(PurchaseRequest request) {
 
-        // =====================================================
+        // -----------------------------------------------------
         // 1. Check whether merchant exists
-        // =====================================================
+        // -----------------------------------------------------
 
         Merchant merchant = merchantRepository.findById(
                 request.getMerchantId()
@@ -49,9 +55,9 @@ public class PurchaseService {
                 )
         );
 
-        // =====================================================
+        // -----------------------------------------------------
         // 2. Prepare transaction object
-        // =====================================================
+        // -----------------------------------------------------
 
         Transaction transaction = new Transaction();
 
@@ -64,9 +70,9 @@ public class PurchaseService {
         transaction.setMerchantId(merchant.getMerchantId());
         transaction.setTransactionDate(LocalDateTime.now());
 
-        // =====================================================
-        // 3. Get card details from Card Service
-        // =====================================================
+        // -----------------------------------------------------
+        // 3. Ask Card Service for card details
+        // -----------------------------------------------------
 
         CardDetails card;
 
@@ -81,62 +87,81 @@ public class PurchaseService {
                     .retrieve()
                     .body(CardDetails.class);
 
+        } catch (RestClientResponseException ex) {
+
+            // Card does NOT exist.
+            // Do not save a FAILED transaction because
+            // TRANSACTION.CARD_NUMBER has an FK to CREDIT_CARD.
+
+            if (ex.getStatusCode().value() == 404) {
+
+                throw new ResourceNotFoundException(
+                        "Card not found with number: "
+                                + request.getCardNumber()
+                );
+            }
+
+            // Other HTTP errors from Card Service.
+            saveFailedTransaction(transaction);
+
+            throw new PurchaseException(
+                    "Card Service returned an error: "
+                            + ex.getStatusCode().value()
+            );
+
         } catch (RestClientException ex) {
 
-            transaction.setStatus("FAILED");
-            transactionRepository.save(transaction);
+            // Card Service is unavailable / connection problem.
+            saveFailedTransaction(transaction);
 
             throw new PurchaseException(
                     "Unable to communicate with Card Service"
             );
         }
 
-        // =====================================================
-        // 4. Make sure card information was received
-        // =====================================================
+        // -----------------------------------------------------
+        // 4. Make sure card response exists
+        // -----------------------------------------------------
 
         if (card == null) {
 
-            transaction.setStatus("FAILED");
-            transactionRepository.save(transaction);
+            saveFailedTransaction(transaction);
 
             throw new PurchaseException(
                     "Card information could not be retrieved"
             );
         }
 
-        // =====================================================
-        // 5. Check card status
-        // =====================================================
+        // -----------------------------------------------------
+        // 5. Check whether card is ACTIVE
+        // -----------------------------------------------------
 
         if (!"ACTIVE".equalsIgnoreCase(card.getCardStatus())) {
 
-            transaction.setStatus("FAILED");
-            transactionRepository.save(transaction);
+            saveFailedTransaction(transaction);
 
             throw new PurchaseException(
                     "Purchase is not allowed. Card is blocked."
             );
         }
 
-        // =====================================================
+        // -----------------------------------------------------
         // 6. Check available credit
-        // =====================================================
+        // -----------------------------------------------------
 
         if (card.getAvailableCredit()
                 .compareTo(request.getPurchaseAmount()) < 0) {
 
-            transaction.setStatus("FAILED");
-            transactionRepository.save(transaction);
+            saveFailedTransaction(transaction);
 
             throw new PurchaseException(
                     "Insufficient available credit"
             );
         }
 
-        // =====================================================
-        // 7. Tell Card Service to actually perform purchase
-        // =====================================================
+        // -----------------------------------------------------
+        // 7. Ask Card Service to actually perform purchase
+        // -----------------------------------------------------
 
         try {
 
@@ -145,34 +170,75 @@ public class PurchaseService {
                             request.getPurchaseAmount()
                     );
 
-            cardServiceClient
-                    .post()
-                    .uri(
-                            "/api/cards/{cardNumber}/purchase",
-                            request.getCardNumber()
-                    )
-                    .body(amountRequest)
-                    .retrieve()
-                    .toBodilessEntity();
+            BalanceResponse balanceResponse =
+                    cardServiceClient
+                            .post()
+                            .uri(
+                                    "/api/cards/{cardNumber}/purchase",
+                                    request.getCardNumber()
+                            )
+                            .body(amountRequest)
+                            .retrieve()
+                            .body(BalanceResponse.class);
+
+            // -------------------------------------------------
+            // 8. Check Card Service response
+            // -------------------------------------------------
+
+            if (balanceResponse == null
+                    || !balanceResponse.success()) {
+
+                saveFailedTransaction(transaction);
+
+                throw new PurchaseException(
+                        "Card Service could not complete the purchase"
+                );
+            }
+
+        } catch (RestClientResponseException ex) {
+
+            // If card suddenly disappears between GET and POST,
+            // don't try to insert a transaction because of the FK.
+
+            if (ex.getStatusCode().value() == 404) {
+
+                throw new ResourceNotFoundException(
+                        "Card not found with number: "
+                                + request.getCardNumber()
+                );
+            }
+
+            // Card exists, but purchase operation returned
+            // an HTTP error.
+            saveFailedTransaction(transaction);
+
+            throw new PurchaseException(
+                    "Card purchase operation failed: "
+                            + ex.getStatusCode().value()
+            );
 
         } catch (RestClientException ex) {
 
-            transaction.setStatus("FAILED");
-            transactionRepository.save(transaction);
+            // Card Service connection problem.
+            saveFailedTransaction(transaction);
 
             throw new PurchaseException(
                     "Card update failed. Purchase was not completed."
             );
         }
 
-        // =====================================================
-        // 8. Record successful purchase
-        // =====================================================
+        // -----------------------------------------------------
+        // 9. Record successful purchase
+        // -----------------------------------------------------
 
         transaction.setStatus("SUCCESS");
 
         return transactionRepository.save(transaction);
     }
+
+    // =========================================================
+    // GET TRANSACTION BY ID
+    // =========================================================
 
     public Transaction getTransactionById(Long transactionId) {
 
@@ -180,23 +246,53 @@ public class PurchaseService {
                 .orElseThrow(() ->
                         new ResourceNotFoundException(
                                 "Transaction not found with ID: "
-                                        + transactionId));
+                                        + transactionId
+                )
+        );
     }
+
+    // =========================================================
+    // GET ALL TRANSACTIONS
+    // =========================================================
 
     public List<Transaction> getAllTransactions() {
 
         return transactionRepository.findAll();
     }
 
+    // =========================================================
+    // GET TRANSACTIONS BY CARD
+    // =========================================================
+
     public List<Transaction> getTransactionsByCard(
             String cardNumber) {
 
-        return transactionRepository.findByCardNumber(cardNumber);
+        return transactionRepository.findByCardNumber(
+                cardNumber
+        );
     }
+
+    // =========================================================
+    // GET TRANSACTIONS BY MERCHANT
+    // =========================================================
 
     public List<Transaction> getTransactionsByMerchant(
             Long merchantId) {
 
-        return transactionRepository.findByMerchantId(merchantId);
+        return transactionRepository.findByMerchantId(
+                merchantId
+        );
+    }
+
+    // =========================================================
+    // SAVE FAILED TRANSACTION
+    // =========================================================
+
+    private void saveFailedTransaction(
+            Transaction transaction) {
+
+        transaction.setStatus("FAILED");
+
+        transactionRepository.save(transaction);
     }
 }
