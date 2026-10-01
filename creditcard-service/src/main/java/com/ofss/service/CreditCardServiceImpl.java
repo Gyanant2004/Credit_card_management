@@ -14,6 +14,9 @@ import java.math.BigDecimal;
 import java.util.List;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import com.ofss.dto.CardUsageResponse;
+import java.util.HashMap;
+import java.util.Map;
 
 @Service
 public class CreditCardServiceImpl implements CreditCardService {
@@ -100,6 +103,68 @@ public class CreditCardServiceImpl implements CreditCardService {
         }
         card.applyPayment(request.amount());
         return BalanceResponse.from(repository.saveAndFlush(card));
+    }
+    
+    @Override
+    @Transactional(readOnly = true)
+    public List<CardResponse> blockedCards() {
+        return repository.findByCardStatus(CardStatus.BLOCKED)
+            .stream()
+            .map(CardResponse::from)
+            .toList();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<CardResponse> cardsBelowTwentyPercent() {
+        return repository.findCardsBelowTwentyPercent()
+            .stream()
+            .map(CardResponse::from)
+            .toList();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<CardUsageResponse> mostUsedCards() {
+        return cardsByUsage(true);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<CardUsageResponse> leastUsedCards() {
+        return cardsByUsage(false);
+    }
+
+    private List<CardUsageResponse> cardsByUsage(boolean mostUsed) {
+        // Start with every issued card so unused cards have a count of zero.
+        List<CreditCard> cards = repository.findAll();
+        if (cards.isEmpty()) {
+            return List.of();
+        }
+
+        Map<Long, Long> counts = new HashMap<>();
+
+        for (Object[] row : repository.countSuccessfulPurchasesByCard()) {
+            Long cardNumber = Long.valueOf(row[0].toString());
+            long count = ((Number) row[1]).longValue();
+            counts.put(cardNumber, count);
+        }
+
+        long target = cards.stream()
+            .mapToLong(card -> counts.getOrDefault(card.getCardNumber(), 0L))
+            .reduce(mostUsed ? Long.MIN_VALUE : Long.MAX_VALUE,
+                    mostUsed ? Math::max : Math::min);
+
+        return cards.stream()
+            .filter(card ->
+                counts.getOrDefault(card.getCardNumber(), 0L) == target)
+            .sorted((a, b) ->
+                a.getCardNumber().compareTo(b.getCardNumber()))
+            .map(card -> new CardUsageResponse(
+                CardResponse.from(card),
+                counts.getOrDefault(card.getCardNumber(), 0L)
+            ))
+            .toList();
     }
 
     private CreditCard locked(Long cardNumber) {
