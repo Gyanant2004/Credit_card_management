@@ -7,7 +7,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestClientResponseException;
-
+import org.springframework.cloud.client.loadbalancer.LoadBalanced;
 import com.ofss.dto.AmountRequest;
 import com.ofss.dto.BalanceResponse;
 import com.ofss.dto.CardDetails;
@@ -22,19 +22,19 @@ import com.ofss.repository.TransactionRepository;
 @Service
 public class PurchaseService {
 
-    private final MerchantRepository merchantRepository;
-    private final TransactionRepository transactionRepository;
-    private final RestClient cardServiceClient;
+	private final MerchantRepository merchantRepository;
+	private final TransactionRepository transactionRepository;
+	private final RestClient.Builder cardServiceClientBuilder;
 
-    public PurchaseService(
-            MerchantRepository merchantRepository,
-            TransactionRepository transactionRepository,
-            RestClient cardServiceClient) {
+	public PurchaseService(
+	        MerchantRepository merchantRepository,
+	        TransactionRepository transactionRepository,
+	        @LoadBalanced RestClient.Builder cardServiceClientBuilder) {
 
-        this.merchantRepository = merchantRepository;
-        this.transactionRepository = transactionRepository;
-        this.cardServiceClient = cardServiceClient;
-    }
+	    this.merchantRepository = merchantRepository;
+	    this.transactionRepository = transactionRepository;
+	    this.cardServiceClientBuilder = cardServiceClientBuilder;
+	}
 
     // =========================================================
     // CREATE PURCHASE
@@ -71,17 +71,19 @@ public class PurchaseService {
         transaction.setTransactionDate(LocalDateTime.now());
 
         // -----------------------------------------------------
-        // 3. Ask Card Service for card details
+        // 3. Get card details from Credit Card Service
+        //    through Eureka + LoadBalancer
         // -----------------------------------------------------
 
         CardDetails card;
 
         try {
 
-            card = cardServiceClient
+            card = cardServiceClientBuilder
+                    .build()
                     .get()
                     .uri(
-                            "/api/cards/{cardNumber}",
+                            "http://CREDIT-CARD-SERVICE/api/cards/{cardNumber}",
                             request.getCardNumber()
                     )
                     .retrieve()
@@ -89,9 +91,9 @@ public class PurchaseService {
 
         } catch (RestClientResponseException ex) {
 
-            // Card does NOT exist.
-            // Do not save a FAILED transaction because
-            // TRANSACTION.CARD_NUMBER has an FK to CREDIT_CARD.
+            // Card does not exist.
+            // Do not save failed transaction because
+            // TRANSACTION.CARD_NUMBER references CREDIT_CARD.
 
             if (ex.getStatusCode().value() == 404) {
 
@@ -101,7 +103,8 @@ public class PurchaseService {
                 );
             }
 
-            // Other HTTP errors from Card Service.
+            // Other HTTP error returned by Card Service.
+
             saveFailedTransaction(transaction);
 
             throw new PurchaseException(
@@ -111,7 +114,8 @@ public class PurchaseService {
 
         } catch (RestClientException ex) {
 
-            // Card Service is unavailable / connection problem.
+            // Card Service could not be reached.
+
             saveFailedTransaction(transaction);
 
             throw new PurchaseException(
@@ -120,7 +124,7 @@ public class PurchaseService {
         }
 
         // -----------------------------------------------------
-        // 4. Make sure card response exists
+        // 4. Check card response
         // -----------------------------------------------------
 
         if (card == null) {
@@ -160,7 +164,8 @@ public class PurchaseService {
         }
 
         // -----------------------------------------------------
-        // 7. Ask Card Service to actually perform purchase
+        // 7. Ask Credit Card Service to perform purchase
+        //    through Eureka + LoadBalancer
         // -----------------------------------------------------
 
         try {
@@ -171,10 +176,11 @@ public class PurchaseService {
                     );
 
             BalanceResponse balanceResponse =
-                    cardServiceClient
+                    cardServiceClientBuilder
+                            .build()
                             .post()
                             .uri(
-                                    "/api/cards/{cardNumber}/purchase",
+                                    "http://CREDIT-CARD-SERVICE/api/cards/{cardNumber}/purchase",
                                     request.getCardNumber()
                             )
                             .body(amountRequest)
@@ -197,8 +203,7 @@ public class PurchaseService {
 
         } catch (RestClientResponseException ex) {
 
-            // If card suddenly disappears between GET and POST,
-            // don't try to insert a transaction because of the FK.
+            // Card disappeared between GET and POST.
 
             if (ex.getStatusCode().value() == 404) {
 
@@ -208,8 +213,8 @@ public class PurchaseService {
                 );
             }
 
-            // Card exists, but purchase operation returned
-            // an HTTP error.
+            // Other HTTP error from Card Service.
+
             saveFailedTransaction(transaction);
 
             throw new PurchaseException(
@@ -219,7 +224,8 @@ public class PurchaseService {
 
         } catch (RestClientException ex) {
 
-            // Card Service connection problem.
+            // Communication error.
+
             saveFailedTransaction(transaction);
 
             throw new PurchaseException(
@@ -247,8 +253,8 @@ public class PurchaseService {
                         new ResourceNotFoundException(
                                 "Transaction not found with ID: "
                                         + transactionId
-                )
-        );
+                        )
+                );
     }
 
     // =========================================================
