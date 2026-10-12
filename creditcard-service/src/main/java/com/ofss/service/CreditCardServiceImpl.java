@@ -144,19 +144,19 @@ public class CreditCardServiceImpl implements CreditCardService {
     @Override
     @Transactional(readOnly = true)
     public List<CardResponse> blockedCards() {
-    	 log.info("Blocked cards report requested");
+        log.info("Blocked cards report requested");
 
-    	    List<CardResponse> cards =
-    	        repository.findByCardStatus(CardStatus.BLOCKED)
-    	            .stream()
-    	            .map(CardResponse::from)
-    	            .toList();
+        List<CardResponse> cards =
+            repository.findByCardStatus(CardStatus.BLOCKED)
+                .stream()
+                .map(CardResponse::from)
+                .toList();
 
-    	    log.info("Blocked cards report returned {} cards", cards.size());
+        log.info("Blocked cards report returned {} cards", cards.size());
 
-    	    return cards;
+        return cards;
     }
-
+    
     @Override
     @Transactional(readOnly = true)
     public List<CardResponse> cardsBelowTwentyPercent() {
