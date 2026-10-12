@@ -1,6 +1,8 @@
 package com.ofss.service;
 
 import com.ofss.dto.AmountRequest;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import com.ofss.dto.BalanceResponse;
 import com.ofss.dto.CardResponse;
 import com.ofss.dto.IssueCardRequest;
@@ -14,10 +16,21 @@ import java.math.BigDecimal;
 import java.util.List;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import com.ofss.dto.CardUsageResponse;
+import java.util.HashMap;
+import java.util.Map;
 
 @Service
 public class CreditCardServiceImpl implements CreditCardService {
+	
+    private static final Logger log = LoggerFactory.getLogger(CreditCardServiceImpl.class);
+	
     private final CreditCardRepository repository;
+    
+    private String maskedCard(Long cardNumber) {
+        String number = String.valueOf(cardNumber);
+        return "****" + number.substring(Math.max(0, number.length() - 4));
+    }
 
     public CreditCardServiceImpl(CreditCardRepository repository) {
         this.repository = repository;
@@ -66,16 +79,42 @@ public class CreditCardServiceImpl implements CreditCardService {
     @Transactional
     public CardResponse block(Long cardNumber) {
         CreditCard card = locked(cardNumber);
+        CardStatus previousStatus = card.getCardStatus();
+
         card.setCardStatus(CardStatus.BLOCKED);
-        return CardResponse.from(repository.saveAndFlush(card));
+
+        CardResponse response =
+            CardResponse.from(repository.saveAndFlush(card));
+
+        log.info(
+            "Card status update flushed: card={}, previousStatus={}, newStatus={}",
+            maskedCard(cardNumber),
+            previousStatus,
+            CardStatus.BLOCKED
+        );
+
+        return response;
     }
 
     @Override
     @Transactional
     public CardResponse unblock(Long cardNumber) {
         CreditCard card = locked(cardNumber);
+        CardStatus previousStatus = card.getCardStatus();
+
         card.setCardStatus(CardStatus.ACTIVE);
-        return CardResponse.from(repository.saveAndFlush(card));
+
+        CardResponse response =
+            CardResponse.from(repository.saveAndFlush(card));
+
+        log.info(
+            "Card status update flushed: card={}, previousStatus={}, newStatus={}",
+            maskedCard(cardNumber),
+            previousStatus,
+            CardStatus.ACTIVE
+        );
+
+        return response;
     }
 
     @Override
@@ -100,6 +139,75 @@ public class CreditCardServiceImpl implements CreditCardService {
         }
         card.applyPayment(request.amount());
         return BalanceResponse.from(repository.saveAndFlush(card));
+    }
+    
+    @Override
+    @Transactional(readOnly = true)
+    public List<CardResponse> blockedCards() {
+    	 log.info("Blocked cards report requested");
+
+    	    List<CardResponse> cards =
+    	        repository.findByCardStatus(CardStatus.BLOCKED)
+    	            .stream()
+    	            .map(CardResponse::from)
+    	            .toList();
+
+    	    log.info("Blocked cards report returned {} cards", cards.size());
+
+    	    return cards;
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<CardResponse> cardsBelowTwentyPercent() {
+        return repository.findCardsBelowTwentyPercent()
+            .stream()
+            .map(CardResponse::from)
+            .toList();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<CardUsageResponse> mostUsedCards() {
+        return cardsByUsage(true);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<CardUsageResponse> leastUsedCards() {
+        return cardsByUsage(false);
+    }
+
+    private List<CardUsageResponse> cardsByUsage(boolean mostUsed) {
+        // Start with every issued card so unused cards have a count of zero.
+        List<CreditCard> cards = repository.findAll();
+        if (cards.isEmpty()) {
+            return List.of();
+        }
+
+        Map<Long, Long> counts = new HashMap<>();
+
+        for (Object[] row : repository.countSuccessfulPurchasesByCard()) {
+            Long cardNumber = Long.valueOf(row[0].toString());
+            long count = ((Number) row[1]).longValue();
+            counts.put(cardNumber, count);
+        }
+
+        long target = cards.stream()
+            .mapToLong(card -> counts.getOrDefault(card.getCardNumber(), 0L))
+            .reduce(mostUsed ? Long.MIN_VALUE : Long.MAX_VALUE,
+                    mostUsed ? Math::max : Math::min);
+
+        return cards.stream()
+            .filter(card ->
+                counts.getOrDefault(card.getCardNumber(), 0L) == target)
+            .sorted((a, b) ->
+                a.getCardNumber().compareTo(b.getCardNumber()))
+            .map(card -> new CardUsageResponse(
+                CardResponse.from(card),
+                counts.getOrDefault(card.getCardNumber(), 0L)
+            ))
+            .toList();
     }
 
     private CreditCard locked(Long cardNumber) {

@@ -21,6 +21,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import com.ofss.dto.CardUsageResponse;
 
 @RestController
 @Validated
@@ -68,6 +69,26 @@ public class CreditCardController {
     public BalanceResponse purchase(@PathVariable Long cardNumber,
                                     @Valid @RequestBody AmountRequest request) {
         return service.purchase(cardNumber, request);
+    }
+    
+    @GetMapping("/reports/most-used")
+    public List<CardUsageResponse> mostUsedCards() {
+        return service.mostUsedCards();
+    }
+
+    @GetMapping("/reports/least-used")
+    public List<CardUsageResponse> leastUsedCards() {
+        return service.leastUsedCards();
+    }
+
+    @GetMapping("/reports/blocked")
+    public List<CardResponse> blockedCards() {
+        return service.blockedCards();
+    }
+
+    @GetMapping("/reports/low-credit")
+    public List<CardResponse> cardsBelowTwentyPercent() {
+        return service.cardsBelowTwentyPercent();
     }
 
     @PostMapping("/{cardNumber}/payment")
